@@ -1,0 +1,21 @@
+//RuhNet LEAPI Config file
+//configDir set by environment variable LEAPI_CONFDIR, otherwise assumed to be /opt/leapi or ./
+{
+	"hostname":"web1.mydomain.net", 			//hostname of this particular server
+	"primary_domain":"mydomain.net", 			//the main base domain that is always present
+	"srv_dir":"/opt/leapi", 					//LEAPI installed directory
+	"user":"root", 								//the username to use for SSH
+	"log_file":"/var/log/leapi.log",
+	"frontend_url":"admin.mydomain.net",	 	//the frontend URL, if any (for CORS). Use "-" if none.
+	"http_server_port":"8080",					//set to 80 if you aren't using a separate web server
+	"https_server_port":"-",					//set to "-" to disable HTTPS (mainly useful for initial setup)
+	"tls_cert_path":"/etc/ssl/cert.crt",
+	"tls_key_path":"/etc/ssl/privkey.key",
+	"tls_chain_path":"/etc/ssl/chain.crt",
+	"tls_pem_path":"/etc/ssl/domain.pem",
+	"tls_ca_path":"/etc/ssl/ca.crt",
+	"letsencrypt_validation_path":"-",			//if "-", LEAPI handles this and you don't use a separate web server
+	"reload_command":"systemctl restart nginx" 	//needs to match on all servers
+}
+
+
