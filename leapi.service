@@ -1,0 +1,16 @@
+[Unit]
+Description=LEAPI Lets Encrypt Certificate Renewal API
+After=network.target
+#After=nebula.service
+#Before=couchdb.service haproxy.service nginx.service
+
+[Service]
+Type=simple
+#ExecStartPre=/bin/sh -c 'until ping -c1 8.8.8.8 ; do sleep 1; done;'
+ExecStart=/opt/leapi/leapi
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+

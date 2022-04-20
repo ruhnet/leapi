@@ -15,7 +15,8 @@
 	"tls_pem_path":"/etc/ssl/domain.pem",
 	"tls_ca_path":"/etc/ssl/ca.crt",
 	"letsencrypt_validation_path":"-",			//if "-", LEAPI handles this and you don't use a separate web server
-	"reload_command":"systemctl restart nginx" 	//needs to match on all servers
+	"renew_allow_days":"70",
+	"reload_command":"systemctl reload leapi ; systemctl restart nginx" 	//needs to match on all servers
 }
 
 

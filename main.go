@@ -71,6 +71,7 @@ type LEAPIConfig struct {
 	PrimaryDomain             string `json:"primary_domain"`
 	LetsEncryptValidationPath string `json:"letsencrypt_validation_path"`
 	ReloadCommand             string `json:"reload_command"`
+	RenewAllow                string `json:"renew_allow_days"`
 }
 
 type UpOut struct {
@@ -277,9 +278,9 @@ func main() {
 
 		srvTLS := &http.Server{
 			Addr:         ":" + leapiconf.HTTPS_ServerPort,
-			ReadTimeout:  60 * time.Second,
-			WriteTimeout: 60 * time.Second,
-			IdleTimeout:  60 * time.Second,
+			ReadTimeout:  120 * time.Second,
+			WriteTimeout: 120 * time.Second,
+			IdleTimeout:  120 * time.Second,
 			TLSConfig:    tlsConfig,
 		}
 
@@ -292,9 +293,9 @@ func main() {
 	//HTTP Server
 	srvHTTP := &http.Server{
 		Addr:         ":" + leapiconf.HTTP_ServerPort,
-		ReadTimeout:  60 * time.Second,
-		WriteTimeout: 60 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		ReadTimeout:  120 * time.Second,
+		WriteTimeout: 120 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
 
 	//Start HTTP Server
@@ -361,8 +362,10 @@ func NewKeypairReloader(certPath, keyPath string) (*keypairReloader, error) {
 		signal.Notify(c, syscall.SIGHUP)
 		for range c {
 			log.Printf("Received SIGHUP, reloading TLS certificate and key from %q and %q", leapiconf.TLSCertFile, leapiconf.TLSKeyFile)
+			fmt.Printf("Received SIGHUP, reloading TLS certificate and key from %q and %q\n", leapiconf.TLSCertFile, leapiconf.TLSKeyFile)
 			if err := result.maybeReload(); err != nil {
 				log.Printf("Keeping old TLS certificate because the new one could not be loaded: %v", err)
+				fmt.Printf("Keeping old TLS certificate because the new one could not be loaded: %v", err)
 			}
 		}
 	}()
@@ -448,7 +451,7 @@ func syncAllServers() error {
 		}
 		//Make http requests to each other servers' /sync endpoints
 		// https://server.tld:port/sync
-		req, err := http.NewRequest("POST", syncScheme+server+":"+syncPort+"/sync", nil)
+		req, err := http.NewRequest("POST", syncScheme+server+":"+syncPort+"/sync/"+leapiconf.Hostname, nil)
 		if err != nil {
 			log.Println(err.Error())
 			return errors.New("Couldn't create new HTTP sync request for server: " + server)
@@ -456,7 +459,11 @@ func syncAllServers() error {
 		req.Close = true
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("User-Agent", myUserAgent)
-		client := &http.Client{Timeout: timeout}
+		//skip verification of cert for https syncing, since the cert may not be setup properly at first
+		customTransport := http.DefaultTransport.(*http.Transport).Clone()
+		customTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+		client := &http.Client{Transport: customTransport, Timeout: timeout}
+		//client := &http.Client{Timeout: timeout}
 		response, err := client.Do(req)
 		if err != nil {
 			log.Println(err.Error())
@@ -487,7 +494,11 @@ func syncServersFromHost(host string) error {
 	}
 	req.Close = true
 	req.Header.Set("User-Agent", myUserAgent)
-	client := &http.Client{Timeout: timeout}
+	//skip verification of cert for https syncing, since the cert may not be setup properly at first
+	customTransport := http.DefaultTransport.(*http.Transport).Clone()
+	customTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	client := &http.Client{Transport: customTransport, Timeout: timeout}
+	//client := &http.Client{Timeout: timeout}
 	response, err := client.Do(req)
 	if err != nil {
 		log.Println(err.Error())
@@ -504,11 +515,13 @@ func syncServersFromHost(host string) error {
 		return theError
 	}
 
-	err = json.Unmarshal(body, &servers)
+	var result APIOutput
+	err = json.Unmarshal(body, &result)
 	if err != nil {
 		log.Println(err.Error())
-		return errors.New("Couldn't store response body from host " + host + " into servers list: " + err.Error())
+		return errors.New("Couldn't parse response body from host " + host + ": " + err.Error())
 	}
+	servers = result.Data
 
 	err = writeServers()
 	if err != nil {
@@ -528,7 +541,11 @@ func syncDomainsFromHost(host string) error {
 	}
 	req.Close = true
 	req.Header.Set("User-Agent", myUserAgent)
-	client := &http.Client{Timeout: timeout}
+	//skip verification of cert for https syncing, since the cert may not be setup properly at first
+	customTransport := http.DefaultTransport.(*http.Transport).Clone()
+	customTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	client := &http.Client{Transport: customTransport, Timeout: timeout}
+	//client := &http.Client{Timeout: timeout}
 	response, err := client.Do(req)
 	if err != nil {
 		log.Println(err.Error())
@@ -545,11 +562,13 @@ func syncDomainsFromHost(host string) error {
 		return theError
 	}
 
-	err = json.Unmarshal(body, &domains)
+	var result APIOutput
+	err = json.Unmarshal(body, &result)
 	if err != nil {
 		log.Println(err.Error())
-		return errors.New("Couldn't store response body from host " + host + " into domains list: " + err.Error())
+		return errors.New("Couldn't parse response body from host " + host + ": " + err.Error())
 	}
+	domains = result.Data
 
 	err = writeDomains()
 	if err != nil {
@@ -565,15 +584,13 @@ func renew() error {
 
 	//domain list
 	var domainlist string
-	if len(domains) > 0 {
-		domainlist = domains[0]
-	}
-	for i, d := range domains {
-		if i == 0 { //we already added first one
+	for _, d := range domains {
+		if d == leapiconf.PrimaryDomain { //ignore primary domain
 			continue
 		}
 		domainlist = domainlist + "," + d
 	}
+	domainlist = strings.TrimLeft(domainlist, ",") //Take off leading comma
 	err := os.Setenv("SANS", domainlist)
 	if err != nil {
 		return errors.New("RENEW: error setting SANS domains list environment variable: " + err.Error())
@@ -581,6 +598,7 @@ func renew() error {
 	fmt.Println(domainlist)
 
 	//ACL string
+	//aclstring := "(" + leapiconf.LetsEncryptValidationPath
 	aclstring := leapiconf.LetsEncryptValidationPath
 	for _, server := range servers {
 		if server == leapiconf.Hostname {
@@ -588,6 +606,7 @@ func renew() error {
 		}
 		aclstring += ";ssh:" + leapiconf.Username + "@" + server + ":" + leapiconf.LetsEncryptValidationPath
 	}
+	//aclstring = aclstring + ")"
 	err = os.Setenv("ACL", aclstring)
 	if err != nil {
 		return errors.New("RENEW: error setting ACL environment variable: " + err.Error())
@@ -670,9 +689,14 @@ func renew() error {
 	}
 	fmt.Println(reload_command)
 
+	err = os.Setenv("RENEW_ALLOW", leapiconf.RenewAllow)
+	if err != nil {
+		return errors.New("RENEW: error setting RENEW_ALLOW environment variable: " + err.Error())
+	}
+
 	//RUN GETSSL
 	//run getssl on primary domain to renew
-	cmd := exec.Command(leapiconf.SrvDir+"/getssl", leapiconf.PrimaryDomain)
+	cmd := exec.Command(leapiconf.SrvDir+"/getssl", "-w", leapiconf.SrvDir, leapiconf.PrimaryDomain)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		log.Println(string(output))
