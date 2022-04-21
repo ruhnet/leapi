@@ -27,9 +27,15 @@ LEAPI operates in a multi-master configuration. When you add or delete a server 
 - Download the LEAPI binary, or build from source.
 - Copy it to ```/opt/leapi```
 - You may use the included SystemD service file if you use a SystemD based distribution.
-- Edit the ```leapi_config.json``` file for your needs, leaving ```production``` set to ```false``` until setup is complete, and copy it to ```/opt/leapi``` or ```/etc```.
-- Install getssl with ```curl --silent https://raw.githubusercontent.com/srvrco/getssl/latest/getssl > /opt/leapi/getssl ; chmod 700 /opt/leapi/getssl```
-- Create the base config for getssl: ```/opt/leapi/getssl -w /opt/leapi -c mycoolsite.com```
+- Edit the ```leapi_config.json``` file for your needs, leaving ```production``` set to ```false``` until setup is complete. Copy the config file to ```/opt/leapi``` or ```/etc```.
+- Install getssl 
+```
+curl --silent https://raw.githubusercontent.com/srvrco/getssl/latest/getssl > /opt/leapi/getssl ; chmod 700 /opt/leapi/getssl
+```
+- Create the base config for getssl:
+```
+/opt/leapi/getssl -w /opt/leapi -c mycoolsite.com
+```
 - Start LEAPI, either from the commandline or with ```systemctl start leapi```
 - Add your servers via the LEAPI API: 
 (You don't necessarily have to do this on the server itself.)
@@ -45,7 +51,9 @@ curl -X PUT http://localhost/api/domains/myothersite.com -H 'Authorization: Bear
 ```
 - Assuming there were no errors, edit your ```leapi_config.json``` file and change ```production``` to ```true```.
 - Force a renewal via the API:
-    curl -X POST http://localhost/api/renew -H 'Authorization: Bearer mySeCrEtKeY'
+```
+curl -X POST http://localhost/api/renew -H 'Authorization: Bearer mySeCrEtKeY'
+```
 
 
 
