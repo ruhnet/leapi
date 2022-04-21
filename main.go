@@ -72,6 +72,9 @@ type LEAPIConfig struct {
 	LetsEncryptValidationPath string `json:"letsencrypt_validation_path"`
 	ReloadCommand             string `json:"reload_command"`
 	RenewAllow                string `json:"renew_allow_days"`
+	SecretKey                 string `json:"secret_key"`
+	Production                bool   `json:"production"`
+	CheckPort                 string `json:"check_port"`
 }
 
 type UpOut struct {
@@ -206,9 +209,16 @@ func main() {
 	*/
 
 	/////////////////////////////////////////////
+	// ROUTE GROUPS
+	api := e.Group("/api") //API routes
+	/////////////////////////////////////////////
+
+	/////////////////////////////////////////////
 	// MIDDLEWARE
 	//Add server header and CORS
 	e.Use(serverHeaders)
+	//Auth API routes
+	api.Use(middleware.KeyAuth(apiKeyAuth))
 	/////////////////////////////////////////////
 
 	/////////////////////////////////////////////
@@ -226,23 +236,23 @@ func main() {
 	//        API Routes           //
 	/////////////////////////////////
 
-	e.OPTIONS("/domains", apiListDomains)
-	e.GET("/domains", apiListDomains)
-	e.OPTIONS("/domains/:domain", apiPutDomain)
-	e.PUT("/domains/:domain", apiPutDomain)
-	e.DELETE("/domains/:domain", apiDeleteDomain)
+	api.OPTIONS("/domains", apiListDomains)
+	api.GET("/domains", apiListDomains)
+	api.OPTIONS("/domains/:domain", apiPutDomain)
+	api.PUT("/domains/:domain", apiPutDomain)
+	api.DELETE("/domains/:domain", apiDeleteDomain)
 
-	e.OPTIONS("/servers", apiListServers)
-	e.GET("/servers", apiListServers)
-	e.OPTIONS("/servers/:server", apiPutServer)
-	e.PUT("/servers/:server", apiPutServer)
-	e.DELETE("/servers/:server", apiDeleteServer)
+	api.OPTIONS("/servers", apiListServers)
+	api.GET("/servers", apiListServers)
+	api.OPTIONS("/servers/:server", apiPutServer)
+	api.PUT("/servers/:server", apiPutServer)
+	api.DELETE("/servers/:server", apiDeleteServer)
 
-	e.OPTIONS("/sync/:host", apiSync)
-	e.POST("/sync/:host", apiSync)
+	api.OPTIONS("/sync/:host", apiSync)
+	api.POST("/sync/:host", apiSync)
 
-	e.OPTIONS("/renew", apiRenew)
-	e.POST("/renew", apiRenew)
+	api.OPTIONS("/renew", apiRenew)
+	api.POST("/renew", apiRenew)
 
 	/////////////////////////////////////////////
 	// HTTP SERVERS CONFIG:
@@ -347,6 +357,10 @@ func serverHeaders(next echo.HandlerFunc) echo.HandlerFunc {
 	}
 }
 
+func apiKeyAuth(key string, c echo.Context) (bool, error) {
+	return (key == leapiconf.SecretKey), nil
+}
+
 func NewKeypairReloader(certPath, keyPath string) (*keypairReloader, error) {
 	result := &keypairReloader{
 		certPath: certPath,
@@ -445,55 +459,88 @@ func writeServers() error {
 
 func syncAllServers() error {
 	var theError error
-	for _, server := range servers {
-		if server == leapiconf.Hostname { //don't send request to myself
+	numservers := len(servers)
+	c := make(chan string)
+
+	var wg sync.WaitGroup
+	wg.Add(numservers)
+	for n := 0; n < numservers; n++ {
+		go func(c chan string) {
+			for {
+				srv, more := <-c
+				if more == false {
+					wg.Done()
+					return
+				}
+
+				log.Println("Parallel execution sync of server: " + srv + "...")
+				err := syncOneServer(srv)
+				if err != nil {
+					log.Println(err.Error)
+					theError = err
+				}
+			}
+		}(c)
+	}
+	for _, server := range servers { //send each server to the channel
+		if server == leapiconf.Hostname { //don't send myself
 			continue
 		}
-		//Make http requests to each other servers' /sync endpoints
-		// https://server.tld:port/sync
-		req, err := http.NewRequest("POST", syncScheme+server+":"+syncPort+"/sync/"+leapiconf.Hostname, nil)
-		if err != nil {
-			log.Println(err.Error())
-			return errors.New("Couldn't create new HTTP sync request for server: " + server)
-		}
-		req.Close = true
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("User-Agent", myUserAgent)
-		//skip verification of cert for https syncing, since the cert may not be setup properly at first
-		customTransport := http.DefaultTransport.(*http.Transport).Clone()
-		customTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
-		client := &http.Client{Transport: customTransport, Timeout: timeout}
-		//client := &http.Client{Timeout: timeout}
-		response, err := client.Do(req)
-		if err != nil {
-			log.Println(err.Error())
-			return errors.New("Couldn't perform HTTP sync request to server: " + server)
-		}
-		body, err := ioutil.ReadAll(response.Body)
-		if err != nil {
-			log.Println(err.Error())
-			return errors.New("Couldn't parse response body on request to server: " + server)
-		}
-		if response.StatusCode != 200 {
-			theError = errors.New("Problem syncing to server " + server + ". Status code: " + strconv.Itoa(response.StatusCode) + " Body: " + string(body))
-			log.Println(theError.Error())
-		}
+		c <- server
 	}
-	if theError != nil {
-		return theError
+	close(c)
+	wg.Wait()
+	log.Println("Finished sending sync requests.")
+
+	return theError //if any one or more fail, return an error for it (the last one that fails)
+}
+
+func syncOneServer(server string) error {
+	//Make http requests to each other servers' /sync endpoints
+	// https://server.tld:port/sync
+	log.Println("SYNC " + server + " starting...")
+	req, err := http.NewRequest("POST", syncScheme+server+":"+syncPort+"/api/sync/"+leapiconf.Hostname, nil)
+	if err != nil {
+		log.Println(err.Error())
+		return errors.New("Couldn't create new HTTP sync request for server: " + server)
 	}
+	req.Close = true
+	req.Header.Set("User-Agent", myUserAgent)
+	req.Header.Set("Authorization", "Bearer "+leapiconf.SecretKey)
+	//skip verification of cert for https syncing, since the cert may not be setup properly at first
+	customTransport := http.DefaultTransport.(*http.Transport).Clone()
+	customTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	client := &http.Client{Transport: customTransport, Timeout: timeout}
+	//client := &http.Client{Timeout: timeout}
+	response, err := client.Do(req)
+	if err != nil {
+		log.Println(err.Error())
+		return errors.New("Couldn't perform HTTP sync request to server: " + server)
+	}
+	body, err := ioutil.ReadAll(response.Body)
+	if err != nil {
+		log.Println(err.Error())
+		return errors.New("Couldn't parse response body on request to server: " + server)
+	}
+	if response.StatusCode != 200 {
+		errorString := "Problem syncing to server " + server + ". Status code: " + strconv.Itoa(response.StatusCode) + " Body: " + string(body)
+		log.Println(errorString)
+		return errors.New(errorString)
+	}
+	log.Println("SYNC " + server + " success!")
 	return nil
 }
 
 func syncServersFromHost(host string) error {
 	var theError error
-	req, err := http.NewRequest("GET", syncScheme+host+":"+syncPort+"/servers", nil)
+	req, err := http.NewRequest("GET", syncScheme+host+":"+syncPort+"/api/servers", nil)
 	if err != nil {
 		log.Println(err.Error())
 		return errors.New("Couldn't create new HTTP request for syncing servers from host: " + host)
 	}
 	req.Close = true
 	req.Header.Set("User-Agent", myUserAgent)
+	req.Header.Set("Authorization", "Bearer "+leapiconf.SecretKey)
 	//skip verification of cert for https syncing, since the cert may not be setup properly at first
 	customTransport := http.DefaultTransport.(*http.Transport).Clone()
 	customTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
@@ -534,13 +581,14 @@ func syncServersFromHost(host string) error {
 
 func syncDomainsFromHost(host string) error {
 	var theError error
-	req, err := http.NewRequest("GET", syncScheme+host+":"+syncPort+"/domains", nil)
+	req, err := http.NewRequest("GET", syncScheme+host+":"+syncPort+"/api/domains", nil)
 	if err != nil {
 		log.Println(err.Error())
 		return errors.New("Couldn't create new HTTP request for syncing domains from host: " + host)
 	}
 	req.Close = true
 	req.Header.Set("User-Agent", myUserAgent)
+	req.Header.Set("Authorization", "Bearer "+leapiconf.SecretKey)
 	//skip verification of cert for https syncing, since the cert may not be setup properly at first
 	customTransport := http.DefaultTransport.(*http.Transport).Clone()
 	customTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
@@ -580,6 +628,7 @@ func syncDomainsFromHost(host string) error {
 }
 
 func renew() error {
+	log.Println("Renew operation initiated...")
 	//BUILD/SET GETSSL ENVIRONMENT VARIABLES THEN EXECUTE GETSSL
 
 	//domain list
@@ -663,6 +712,7 @@ func renew() error {
 		return errors.New("RENEW: error setting DOMAIN_PEM_LOCATION environment variable: " + err.Error())
 	}
 
+	//these parameters don't seem to be respected by gettssl from environment variables, so write them to config file:
 	ca_cert_location := leapiconf.TLSCAFile
 	for _, server := range servers {
 		if server == leapiconf.Hostname {
@@ -670,42 +720,60 @@ func renew() error {
 		}
 		ca_cert_location += ";ssh:" + leapiconf.Username + "@" + server + ":" + leapiconf.TLSCAFile
 	}
-	err = os.Setenv("CA_CERT_LOCATION", ca_cert_location)
-	if err != nil {
-		return errors.New("RENEW: error setting CA_CERT_LOCATION environment variable: " + err.Error())
-	}
 
-	//reload command
 	reload_command := leapiconf.ReloadCommand
 	for _, server := range servers {
 		if server == leapiconf.Hostname {
 			continue
 		}
-		reload_command += "; ssh " + leapiconf.Username + "@" + server + " '" + leapiconf.ReloadCommand + "' "
+		reload_command += "; ssh " + leapiconf.Username + "@" + server + " '" + leapiconf.ReloadCommand + "'"
 	}
-	err = os.Setenv("RELOAD_CMD", reload_command)
-	if err != nil {
-		return errors.New("RENEW: error setting RELOAD_COMMAND environment variable: " + err.Error())
-	}
-	fmt.Println(reload_command)
 
-	err = os.Setenv("RENEW_ALLOW", leapiconf.RenewAllow)
-	if err != nil {
-		return errors.New("RENEW: error setting RENEW_ALLOW environment variable: " + err.Error())
+	ca_server := "https://acme-staging-v02.api.letsencrypt.org"
+	if leapiconf.Production {
+		ca_server = "https://acme-v02.api.letsencrypt.org"
 	}
+
+	var configFile string
+
+	configFile = "CA=\"" + ca_server + "\"\n"
+	configFile += "USE_SINGLE_ACL=\"true\"\n"
+	configFile += "CA_CERT_LOCATION=\"" + leapiconf.TLSCAFile + "\"\n"
+	configFile += "RELOAD_CMD=\"" + reload_command + "\"\n"
+	configFile += "RENEW_ALLOW=\"" + leapiconf.RenewAllow + "\"\n"
+	configFile += "CHECK_REMOTE=\"true\"\n"
+	configFile += "SERVER_TYPE=\"" + leapiconf.CheckPort + "\"\n"
+	configFile += "CHECK_REMOTE_WAIT=\"5\"\n"
+
+	//write config file
+	err = ioutil.WriteFile(configDir+"/"+leapiconf.PrimaryDomain+"/getssl.cfg", []byte(configFile), 0644)
+	if err != nil {
+		return errors.New("Couldn't write getssl config file: " + configDir + "/" + leapiconf.PrimaryDomain + "/getssl.cfg")
+	}
+
+	/*
+		//////PRINT VARS
+		fmt.Println()
+		for _, e := range os.Environ() {
+			fmt.Println(e)
+		}
+	*/
 
 	//RUN GETSSL
 	//run getssl on primary domain to renew
+	//cmd := exec.Command(leapiconf.SrvDir+"/getssl", "-u", "-w", leapiconf.SrvDir, leapiconf.PrimaryDomain)
 	cmd := exec.Command(leapiconf.SrvDir+"/getssl", "-w", leapiconf.SrvDir, leapiconf.PrimaryDomain)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		log.Println("BEGIN GETSSL OUTPUT:")
 		log.Println(string(output))
+		log.Println("END GETSSL OUTPUT")
 		return errors.New("RENEW: execution of getssl failed: " + err.Error())
 	}
 
 	log.Println("BEGIN GETSSL OUTPUT:")
 	log.Println(string(output))
-	log.Println("END GETSSL OUTPUT:")
+	log.Println("END GETSSL OUTPUT")
 
 	return nil
 }
@@ -903,6 +971,8 @@ func apiDeleteServer(c echo.Context) error {
 
 func apiSync(c echo.Context) error {
 	host := c.Param("host")
+
+	log.Println("Received sync request for host: " + host + ". From IP address: " + c.RealIP() + " Syncing...")
 
 	err := syncServersFromHost(host)
 	if err != nil {

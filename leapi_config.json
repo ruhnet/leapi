@@ -7,7 +7,7 @@
 	"user":"root", 								//the username to use for SSH
 	"log_file":"/var/log/leapi.log",
 	"frontend_url":"admin.mydomain.net",	 	//the frontend URL, if any (for CORS). Use "-" if none.
-	"http_server_port":"8080",					//set to 80 if you aren't using a separate web server
+	"http_server_port":"80",					//set to 80 if you aren't using a separate web server
 	"https_server_port":"-",					//set to "-" to disable HTTPS (mainly useful for initial setup)
 	"tls_cert_path":"/etc/ssl/cert.crt",
 	"tls_key_path":"/etc/ssl/privkey.key",
@@ -16,7 +16,10 @@
 	"tls_ca_path":"/etc/ssl/ca.crt",
 	"letsencrypt_validation_path":"-",			//if "-", LEAPI handles this and you don't use a separate web server
 	"renew_allow_days":"70",
-	"reload_command":"systemctl reload leapi ; systemctl restart nginx" 	//needs to match on all servers
+	"reload_command":"systemctl reload leapi ; systemctl restart nginx", 	//needs to match on all servers
+	"check_port":"443", //the port/service to check to verify cert installation (https/imap/imaps/xmpp/ftp/smtp)
+	"production":false, //if false, the staging LE server will be used. Set true to use the rate limited real server.
+	"secret_key":"jEn-vQ832h^01j2rUq0jd-svji8ejf"
 }
 
 
