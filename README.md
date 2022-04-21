@@ -1,4 +1,4 @@
-# LEAPI
+﻿# LEAPI
 
 LEAPI is a clustered server API system, written in Go, for managing Lets Encrypt certificate renewals.
 
@@ -31,13 +31,18 @@ LEAPI operates in a multi-master configuration. When you add or delete a server 
 - Install getssl with ```curl --silent https://raw.githubusercontent.com/srvrco/getssl/latest/getssl > /opt/leapi/getssl ; chmod 700 /opt/leapi/getssl```
 - Create the base config for getssl: ```/opt/leapi/getssl -w /opt/leapi -c mycoolsite.com```
 - Start LEAPI, either from the commandline or with ```systemctl start leapi```
-- Add your servers via the LEAPI API: (You don't necessarily have to do this on the server itself.)
-    curl -X PUT http://localhost/api/servers/server1.mydomain.com -H 'Authorization: Bearer mySeCrEtKeY'
-    curl -X PUT http://localhost/api/servers/server2.mydomain.com -H 'Authorization: Bearer mySeCrEtKeY'
-    curl -X PUT http://localhost/api/servers/server3.mydomain.com -H 'Authorization: Bearer mySeCrEtKeY'
+- Add your servers via the LEAPI API: 
+(You don't necessarily have to do this on the server itself.)
+```
+curl -X PUT http://localhost/api/servers/server1.mydomain.com -H 'Authorization: Bearer mySeCrEtKeY'
+curl -X PUT http://localhost/api/servers/server2.mydomain.com -H 'Authorization: Bearer mySeCrEtKeY'
+curl -X PUT http://localhost/api/servers/server3.mydomain.com -H 'Authorization: Bearer mySeCrEtKeY'
+```
 - Add your domains via the LEAPI API:
-    curl -X PUT http://localhost/api/domains/mycoolsite.com -H 'Authorization: Bearer mySeCrEtKeY'
-    curl -X PUT http://localhost/api/domains/myothersite.com -H 'Authorization: Bearer mySeCrEtKeY'
+```
+curl -X PUT http://localhost/api/domains/mycoolsite.com -H 'Authorization: Bearer mySeCrEtKeY'
+curl -X PUT http://localhost/api/domains/myothersite.com -H 'Authorization: Bearer mySeCrEtKeY'
+```
 - Assuming there were no errors, edit your ```leapi_config.json``` file and change ```production``` to ```true```.
 - Force a renewal via the API:
     curl -X POST http://localhost/api/renew -H 'Authorization: Bearer mySeCrEtKeY'
