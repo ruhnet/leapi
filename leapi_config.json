@@ -19,7 +19,7 @@
 	"reload_command":"systemctl reload leapi ; systemctl restart nginx", 	//needs to match on all servers
 	"check_port":"443", //the port/service to check to verify cert installation (https/imap/imaps/xmpp/ftp/smtp)
 	"production":false, //if false, the staging LE server will be used. Set true to use the rate limited real server.
-	"secret_key":"jEn-vQ832h^01j2rUq0jd-svji8ejf"
+	"secret_key":"SecReT_KeY-4API-AuThenTiCaTiON"
 }
 
 

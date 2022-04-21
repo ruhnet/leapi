@@ -264,13 +264,13 @@ func main() {
 		syncPort = leapiconf.HTTPS_ServerPort
 
 		//certPair, err := tls.LoadX509KeyPair(leapiconf.TLSCertificateFile, leapiconf.TLSKeyFile)
-		if !fileExists(leapiconf.TLSCertFile) || !fileExists(leapiconf.TLSKeyFile) {
+		if !fileExists(leapiconf.TLSChainFile) || !fileExists(leapiconf.TLSKeyFile) {
 			fmt.Println("Provided certificate and/or key file does not exist! Terminating.")
 			log.Fatal("Provided certificate and/or key file does not exist! Terminating.")
 		}
 
 		//Create loader for cert files
-		kpr, err := NewKeypairReloader(leapiconf.TLSCertFile, leapiconf.TLSKeyFile)
+		kpr, err := NewKeypairReloader(leapiconf.TLSChainFile, leapiconf.TLSKeyFile)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -375,8 +375,8 @@ func NewKeypairReloader(certPath, keyPath string) (*keypairReloader, error) {
 		c := make(chan os.Signal, 1)
 		signal.Notify(c, syscall.SIGHUP)
 		for range c {
-			log.Printf("Received SIGHUP, reloading TLS certificate and key from %q and %q", leapiconf.TLSCertFile, leapiconf.TLSKeyFile)
-			fmt.Printf("Received SIGHUP, reloading TLS certificate and key from %q and %q\n", leapiconf.TLSCertFile, leapiconf.TLSKeyFile)
+			log.Printf("Received SIGHUP, reloading TLS certificate and key from %q and %q", leapiconf.TLSChainFile, leapiconf.TLSKeyFile)
+			fmt.Printf("Received SIGHUP, reloading TLS certificate and key from %q and %q\n", leapiconf.TLSChainFile, leapiconf.TLSKeyFile)
 			if err := result.maybeReload(); err != nil {
 				log.Printf("Keeping old TLS certificate because the new one could not be loaded: %v", err)
 				fmt.Printf("Keeping old TLS certificate because the new one could not be loaded: %v", err)

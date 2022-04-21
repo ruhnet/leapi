@@ -31,7 +31,11 @@ LEAPI operates in a multi-master configuration. When you add or delete a server 
 - Download the LEAPI binary, or build from source.
 - Copy it to ```/opt/leapi```
 - You may use the included SystemD service file if you use a SystemD based distribution.
-- Edit the ```leapi_config.json``` file for your needs, leaving ```production``` set to ```false``` until setup is complete. Copy the config file to ```/opt/leapi``` or ```/etc```.
+- Edit the ```leapi_config.json``` file for your needs, leaving ```production``` set to ```false``` until setup is complete. Note: if you enable HTTPS in the config file, LEAPI needs a certificate to be able to start (it requires the ```tls_chain_path``` and ```tls_key_path```. You can generate a temporary self signed certificate and key with openssl:
+```
+openssl req -x509 -nodes -newkey rsa:4096 -keyout privkey.key -out cert.crt -sha256 -days 365
+```
+- Copy the config file to ```/opt/leapi``` or ```/etc```.
 - Install getssl
 ```
 curl --silent https://raw.githubusercontent.com/srvrco/getssl/latest/getssl > /opt/leapi/getssl ; chmod 700 /opt/leapi/getssl
