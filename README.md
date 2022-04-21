@@ -11,24 +11,28 @@ LEAPI operates in a multi-master configuration. When you add or delete a server 
 
 ## Endpoints:
 
-```[GET]  https://leapiserver.tld/api/servers``` --- List Servers
+```[GET]    https://leapiserver.tld/api/servers``` --- List Servers
 
-```[PUT]  https://leapiserver.tld/api/servers/web1.mydomain.com``` --- Add New Server
+```[PUT]    https://leapiserver.tld/api/servers/web1.mybackend.com``` --- Add New Server
 
-```[GET]  https://leapiserver.tld/api/domains``` --- List Domains
+```[DELETE] https://leapiserver.tld/api/servers/web1.mybackend.com``` --- Remove Server
 
-```[POST] https://leapiserver.tld/api/domains/mycoolsite.com``` --- Add New Domain
+```[GET]    https://leapiserver.tld/api/domains``` --- List Domains
 
-```[POST] https://leapiserver.tld/api/renew``` --- Force Renewal
+```[POST]   https://leapiserver.tld/api/domains/mycoolsite.com``` --- Add New Domain
 
-```[GET]  https://leapiserver.tld/up``` --- Uptime Check
+```[DELETE] https://leapiserver.tld/api/domains/mycoolsite.com``` --- Remove Domain
+
+```[POST]   https://leapiserver.tld/api/renew``` --- Force Renewal
+
+```[GET]    https://leapiserver.tld/up``` --- Uptime Check
 
 ## Install
 - Download the LEAPI binary, or build from source.
 - Copy it to ```/opt/leapi```
 - You may use the included SystemD service file if you use a SystemD based distribution.
 - Edit the ```leapi_config.json``` file for your needs, leaving ```production``` set to ```false``` until setup is complete. Copy the config file to ```/opt/leapi``` or ```/etc```.
-- Install getssl 
+- Install getssl
 ```
 curl --silent https://raw.githubusercontent.com/srvrco/getssl/latest/getssl > /opt/leapi/getssl ; chmod 700 /opt/leapi/getssl
 ```
