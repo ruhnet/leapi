@@ -1,7 +1,7 @@
 //RuhNet LEAPI Config file
 //configDir set by environment variable LEAPI_CONFDIR, otherwise assumed to be /opt/leapi or ./
 {
-	"hostname":"web1.mydomain.net", 			//hostname of this particular server
+	"hostname":"web1.mydomain.net", 			//hostname of this particular server; must match the server you add to LEAPI
 	"primary_domain":"mydomain.net", 			//the main base domain that is always present
 	"srv_dir":"/opt/leapi", 					//LEAPI installed directory
 	"user":"root", 								//the username to use for SSH
