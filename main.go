@@ -224,6 +224,7 @@ func main() {
 	/////////////////////////////////////////////
 	// ROUTES:
 
+	e.GET("/", nothingResponse)
 	e.HEAD("/", uptimeCheck)
 	e.HEAD("/up", uptimeCheck)
 	e.GET("/up", uptimeCheck)
@@ -793,6 +794,10 @@ func uptime() UpOut {
 /////////////////////////////////////////////
 ///// API ROUTE FUNCTIONS
 /////////////////////////////////////////////
+func nothingResponse(c echo.Context) error {
+	return c.NoContent(http.StatusNotFound)
+}
+
 func uptimeCheck(c echo.Context) error {
 	if c.Request().Method == http.MethodHead {
 		return c.NoContent(http.StatusOK)
