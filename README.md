@@ -9,6 +9,7 @@ You can use it standalone, for acquiring/renewing certificates for non web servi
 
 LEAPI operates in a multi-master configuration. When you add or delete a server or domain on any server, it automatically replicates the changes to all other servers, and renews your certificate. Replication is accomplished via HTTP.
 
+
 ## Endpoints:
 
 ```[GET]    https://leapiserver.tld/api/servers``` --- List Servers
@@ -19,7 +20,7 @@ LEAPI operates in a multi-master configuration. When you add or delete a server 
 
 ```[GET]    https://leapiserver.tld/api/domains``` --- List Domains
 
-```[POST]   https://leapiserver.tld/api/domains/mycoolsite.com``` --- Add New Domain
+```[PUT]   https://leapiserver.tld/api/domains/mycoolsite.com``` --- Add New Domain
 
 ```[DELETE] https://leapiserver.tld/api/domains/mycoolsite.com``` --- Remove Domain
 
@@ -31,7 +32,7 @@ LEAPI operates in a multi-master configuration. When you add or delete a server 
 - Download the LEAPI binary, or build from source.
 - Copy it to ```/opt/leapi```
 - You may use the included SystemD service file if you use a SystemD based distribution.
-- Edit the ```leapi_config.json``` file for your needs, leaving ```production``` set to ```false``` until setup is complete. Note: if you enable HTTPS in the config file, LEAPI needs a certificate to be able to start (it requires the ```tls_chain_path``` and ```tls_key_path```. You can generate a temporary self signed certificate and key with openssl:
+- Edit the ```leapi_config.json``` file for your needs, leaving ```production``` set to ```false``` until setup is complete. Set the ```sync_type``` to either ```ssh``` or ```https```. If you choose ```ssh``` you must create and copy keys and verify you can login to all servers that need to share files between each other. Note: if you enable ```https_server_port``` in the config file, LEAPI needs a certificate to be able to start (it requires the ```tls_chain_path``` and ```tls_key_path```. You can generate a temporary self signed certificate and key with openssl:
 ```
 openssl req -x509 -nodes -newkey rsa:4096 -keyout privkey.key -out cert.crt -sha256 -days 365
 ```

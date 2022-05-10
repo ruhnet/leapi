@@ -1,4 +1,4 @@
-//LEAPI Voice Control API - Copyright 2022 Ruel Tmeizeh All Rights Reserved
+//LEAPI - ACME Certificate Renewal Control API - Copyright 2022 Ruel Tmeizeh All Rights Reserved
 
 package main
 
@@ -8,12 +8,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
+	"path"
 	"reflect"
 	"regexp"
 	"strconv"
@@ -23,11 +25,12 @@ import (
 	"time"
 
 	"github.com/fatih/color"
+	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 )
 
-const version string = "1.0"
+const version string = "1.1.0"
 const serverVersion string = "RuhNet LE API v" + version
 const apiVersion int = 1
 const website string = "https://ruhnet.co"
@@ -57,9 +60,11 @@ _____________________________________________________
 
 type LEAPIConfig struct {
 	Hostname                  string `json:"hostname"`
-	Username                  string `json:"user"`
+	SyncType                  string `json:"sync_type"`
+	Username                  string `json:"username"`
 	SrvDir                    string `json:"srv_dir"`
 	LogFile                   string `json:"log_file"`
+	Debug                     bool   `json:"debug"`
 	HTTP_ServerPort           string `json:"http_server_port"`
 	HTTPS_ServerPort          string `json:"https_server_port"`
 	TLSCertFile               string `json:"tls_cert_path"`
@@ -130,7 +135,6 @@ func main() {
 	//strip out // comments from config file:
 	re := regexp.MustCompile(`([\s]//.*)|(^//.*)`)
 	fileCleanedBytes := re.ReplaceAll(fileBytes, nil)
-	//fmt.Println(string(fileCleanedBytes))
 
 	err = json.Unmarshal(fileCleanedBytes, &leapiconf) //populate the config struct with JSON data from the config file
 	if err != nil {
@@ -193,6 +197,15 @@ func main() {
 		leapiconf.LetsEncryptValidationPath = leapiconf.SrvDir + "/acme-challenge"
 	}
 
+	if leapiconf.Hostname == "-" {
+		hostname, err := os.Hostname()
+		if err != nil {
+			log.Fatal("Hostname could not be auto-detected from system: " + err.Error())
+		}
+		leapiconf.Hostname = hostname
+	}
+	fmt.Println("My hostname: " + leapiconf.Hostname)
+
 	/////////////////////////////////////////////
 	//Echo config:
 	e := echo.New() // Echo instance
@@ -210,7 +223,8 @@ func main() {
 
 	/////////////////////////////////////////////
 	// ROUTE GROUPS
-	api := e.Group("/api") //API routes
+	api := e.Group("/api")          //API routes
+	apiFile := e.Group("/api/file") //API routes
 	/////////////////////////////////////////////
 
 	/////////////////////////////////////////////
@@ -219,6 +233,7 @@ func main() {
 	e.Use(serverHeaders)
 	//Auth API routes
 	api.Use(middleware.KeyAuth(apiKeyAuth))
+	apiFile.Use(middleware.BasicAuth(apiBasicAuth))
 	/////////////////////////////////////////////
 
 	/////////////////////////////////////////////
@@ -255,6 +270,15 @@ func main() {
 	api.OPTIONS("/renew", apiRenew)
 	api.POST("/renew", apiRenew)
 
+	api.OPTIONS("/reload", apiReload)
+	api.POST("/reload", apiReload)
+
+	apiFile.OPTIONS("/upload/:fileType", apiUpload)
+	apiFile.PUT("/upload/:fileType", apiUpload)
+
+	apiFile.OPTIONS("/sync/:fileType", apiUploadSync)
+	apiFile.PUT("/sync/:fileType", apiUploadSync)
+
 	/////////////////////////////////////////////
 	// HTTP SERVERS CONFIG:
 
@@ -289,9 +313,9 @@ func main() {
 
 		srvTLS := &http.Server{
 			Addr:         ":" + leapiconf.HTTPS_ServerPort,
-			ReadTimeout:  120 * time.Second,
-			WriteTimeout: 120 * time.Second,
-			IdleTimeout:  120 * time.Second,
+			ReadTimeout:  180 * time.Second,
+			WriteTimeout: 180 * time.Second,
+			IdleTimeout:  180 * time.Second,
 			TLSConfig:    tlsConfig,
 		}
 
@@ -304,9 +328,9 @@ func main() {
 	//HTTP Server
 	srvHTTP := &http.Server{
 		Addr:         ":" + leapiconf.HTTP_ServerPort,
-		ReadTimeout:  120 * time.Second,
-		WriteTimeout: 120 * time.Second,
-		IdleTimeout:  120 * time.Second,
+		ReadTimeout:  180 * time.Second,
+		WriteTimeout: 180 * time.Second,
+		IdleTimeout:  180 * time.Second,
 	}
 
 	//Start HTTP Server
@@ -360,6 +384,10 @@ func serverHeaders(next echo.HandlerFunc) echo.HandlerFunc {
 
 func apiKeyAuth(key string, c echo.Context) (bool, error) {
 	return (key == leapiconf.SecretKey), nil
+}
+
+func apiBasicAuth(username, password string, c echo.Context) (bool, error) {
+	return ((username == leapiconf.Username) && (password == leapiconf.SecretKey)), nil
 }
 
 func NewKeypairReloader(certPath, keyPath string) (*keypairReloader, error) {
@@ -420,6 +448,10 @@ func errorOut(status int, msg string) (int, APIOutput) {
 	return out.Status, out
 }
 
+func generateUUID() string {
+	return strings.Replace(uuid.New().String(), "-", "", -1)
+}
+
 func fileExists(filename string) bool {
 	info, err := os.Stat(filename)
 	if os.IsNotExist(err) {
@@ -477,7 +509,7 @@ func syncAllServers() error {
 				log.Println("Parallel execution sync of server: " + srv + "...")
 				err := syncOneServer(srv)
 				if err != nil {
-					log.Println(err.Error)
+					log.Println(err.Error())
 					theError = err
 				}
 			}
@@ -628,6 +660,95 @@ func syncDomainsFromHost(host string) error {
 	return nil
 }
 
+func sendFileToAllServers(filePath string) error {
+	var theError error
+	numservers := len(servers)
+	c := make(chan string)
+
+	var wg sync.WaitGroup
+	wg.Add(numservers)
+	for n := 0; n < numservers; n++ {
+		go func(c chan string) {
+			for {
+				srv, more := <-c
+				if more == false {
+					wg.Done()
+					return
+				}
+
+				log.Println("Parallel execution send file to server: " + srv + "...")
+				err := sendFileToServer(filePath, srv)
+				if err != nil {
+					log.Println(err.Error())
+					theError = err
+				}
+			}
+		}(c)
+	}
+	for _, server := range servers { //send each server to the channel
+		if server == leapiconf.Hostname { //don't send myself
+			continue
+		}
+		c <- server
+	}
+	close(c)
+	wg.Wait()
+	if theError == nil {
+		log.Println("Finished sending file " + filePath + " to all servers.")
+	}
+
+	err := os.Remove(filePath)
+	if err != nil {
+		log.Println("Error deleting temporary file: " + filePath + " - " + err.Error())
+	}
+	return theError //if any one or more fail, return an error for it (the last one that fails)
+}
+
+func sendFileToServer(filePath, server string) error {
+	log.Println("Send file " + filePath + " to " + server + " starting...")
+
+	_, fileName := path.Split(filePath)
+	dest := strings.SplitN(fileName, "__", 2)[0] //cert__abcdef1234567890.tmpfile --> "cert"
+	data, err := os.Open(filePath)
+	if err != nil {
+		return errors.New("sendFileToServer: Could not open temporary file " + filePath + ": " + err.Error())
+	}
+	url := syncScheme + server + ":" + syncPort + "/api/file/upload/" + dest
+	log.Println("Send file " + filePath + " to " + url + "...")
+
+	req, err := http.NewRequest("PUT", url, data)
+	if err != nil {
+		log.Println(err.Error())
+		return errors.New("Couldn't create new HTTP file upload request for server: " + server)
+	}
+	req.Close = true
+	req.Header.Set("User-Agent", myUserAgent)
+	req.SetBasicAuth(leapiconf.Username, leapiconf.SecretKey)
+	//req.Header.Set("Authorization", "Bearer "+leapiconf.SecretKey)
+	//skip verification of cert, since the cert may not be setup properly at first
+	customTransport := http.DefaultTransport.(*http.Transport).Clone()
+	customTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	client := &http.Client{Transport: customTransport, Timeout: timeout}
+	//client := &http.Client{Timeout: timeout}
+	response, err := client.Do(req)
+	if err != nil {
+		log.Println(err.Error())
+		return errors.New("Couldn't do HTTP file upload to server: " + server)
+	}
+	body, err := ioutil.ReadAll(response.Body)
+	if err != nil {
+		log.Println(err.Error())
+		return errors.New("Couldn't parse response body on request to server: " + server)
+	}
+	if response.StatusCode != 200 {
+		errorString := "Problem uploading file to server " + server + ". Status code: " + strconv.Itoa(response.StatusCode) + " Body: " + string(body)
+		log.Println(errorString)
+		return errors.New(errorString)
+	}
+	log.Println("Upload [" + dest + "] to " + server + " success!")
+	return nil
+}
+
 func renew() error {
 	log.Println("Renew operation initiated...")
 	//BUILD/SET GETSSL ENVIRONMENT VARIABLES THEN EXECUTE GETSSL
@@ -645,44 +766,63 @@ func renew() error {
 	if err != nil {
 		return errors.New("RENEW: error setting SANS domains list environment variable: " + err.Error())
 	}
-	fmt.Println(domainlist)
+	if leapiconf.Debug {
+		log.Println(domainlist)
+	}
 
 	//ACL string
-	//aclstring := "(" + leapiconf.LetsEncryptValidationPath
 	aclstring := leapiconf.LetsEncryptValidationPath
-	for _, server := range servers {
-		if server == leapiconf.Hostname {
-			continue
+	if leapiconf.SyncType == "ssh" {
+		for _, server := range servers {
+			if server == leapiconf.Hostname {
+				continue
+			}
+			aclstring += ";ssh:" + leapiconf.Username + "@" + server + ":" + leapiconf.LetsEncryptValidationPath
+			//aclstring += ";davs:leapi:" + leapiconf.SecretKey + ":" + server + ":" + syncPort + ":/api/file/upload/"
 		}
-		aclstring += ";ssh:" + leapiconf.Username + "@" + server + ":" + leapiconf.LetsEncryptValidationPath
+	} else { //file sync type is HTTPS
+		aclstring += ";davs:" + leapiconf.Username + ":" + leapiconf.SecretKey + ":" + leapiconf.Hostname + ":" + leapiconf.HTTPS_ServerPort + ":/api/file/sync"
+		//aclstring += " ;cmd:\"curl -s -k -u" + leapiconf.Username + "\\:" + leapiconf.SecretKey + " " + syncScheme + leapiconf.Hostname + ":" + syncPort + "/api/file/upload/" + "$destfile" + " -T $src \"" + ":" + leapiconf.LetsEncryptValidationPath
 	}
-	//aclstring = aclstring + ")"
 	err = os.Setenv("ACL", aclstring)
 	if err != nil {
 		return errors.New("RENEW: error setting ACL environment variable: " + err.Error())
 	}
-	fmt.Println(aclstring)
+
+	if leapiconf.Debug {
+		log.Println("ACL STRING:")
+		log.Println(aclstring)
+	}
 
 	//Cert and key locations
 	domain_cert_location := leapiconf.TLSCertFile
-	for _, server := range servers {
-		if server == leapiconf.Hostname {
-			continue
+	if leapiconf.SyncType == "ssh" {
+		for _, server := range servers {
+			if server == leapiconf.Hostname {
+				continue
+			}
+			domain_cert_location += ";ssh:" + leapiconf.Username + "@" + server + ":" + leapiconf.TLSCertFile
+			//domain_cert_location += ";davs:leapi:" + leapiconf.SecretKey + ":" + server + ":" + syncPort + ":/api/file/upload/cert"
 		}
-		domain_cert_location += ";ssh:" + leapiconf.Username + "@" + server + ":" + leapiconf.TLSCertFile
+	} else { //file sync type is HTTPS
+		domain_cert_location += ";davs:" + leapiconf.Username + ":" + leapiconf.SecretKey + ":" + leapiconf.Hostname + ":" + leapiconf.HTTPS_ServerPort + ":/api/file/sync/cert"
 	}
 	err = os.Setenv("DOMAIN_CERT_LOCATION", domain_cert_location)
 	if err != nil {
 		return errors.New("RENEW: error setting DOMAIN_CERT_LOCATION environment variable: " + err.Error())
 	}
-	fmt.Println(domain_cert_location)
 
 	domain_key_location := leapiconf.TLSKeyFile
-	for _, server := range servers {
-		if server == leapiconf.Hostname {
-			continue
+	if leapiconf.SyncType == "ssh" {
+		for _, server := range servers {
+			if server == leapiconf.Hostname {
+				continue
+			}
+			domain_key_location += ";ssh:" + leapiconf.Username + "@" + server + ":" + leapiconf.TLSKeyFile
+			//domain_key_location += ";davs:leapi:" + leapiconf.SecretKey + ":" + server + ":" + syncPort + ":/api/file/upload/key"
 		}
-		domain_key_location += ";ssh:" + leapiconf.Username + "@" + server + ":" + leapiconf.TLSKeyFile
+	} else { //file sync type is HTTPS
+		domain_key_location += ";davs:" + leapiconf.Username + ":" + leapiconf.SecretKey + ":" + leapiconf.Hostname + ":" + leapiconf.HTTPS_ServerPort + ":/api/file/sync/key"
 	}
 	err = os.Setenv("DOMAIN_KEY_LOCATION", domain_key_location)
 	if err != nil {
@@ -690,11 +830,16 @@ func renew() error {
 	}
 
 	domain_chain_location := leapiconf.TLSChainFile
-	for _, server := range servers {
-		if server == leapiconf.Hostname {
-			continue
+	if leapiconf.SyncType == "ssh" {
+		for _, server := range servers {
+			if server == leapiconf.Hostname {
+				continue
+			}
+			//domain_chain_location += ";ssh:" + leapiconf.Username + "@" + server + ":" + leapiconf.TLSChainFile
+			domain_chain_location += ";davs:leapi:" + leapiconf.SecretKey + ":" + server + ":" + syncPort + ":/api/file/upload/chain"
 		}
-		domain_chain_location += ";ssh:" + leapiconf.Username + "@" + server + ":" + leapiconf.TLSChainFile
+	} else { //file sync type is HTTPS
+		domain_chain_location += ";davs:" + leapiconf.Username + ":" + leapiconf.SecretKey + ":" + leapiconf.Hostname + ":" + leapiconf.HTTPS_ServerPort + ":/api/file/sync/chain"
 	}
 	err = os.Setenv("DOMAIN_CHAIN_LOCATION", domain_chain_location)
 	if err != nil {
@@ -702,11 +847,16 @@ func renew() error {
 	}
 
 	domain_pem_location := leapiconf.TLSPEMFile
-	for _, server := range servers {
-		if server == leapiconf.Hostname {
-			continue
+	if leapiconf.SyncType == "ssh" {
+		for _, server := range servers {
+			if server == leapiconf.Hostname {
+				continue
+			}
+			domain_pem_location += ";ssh:" + leapiconf.Username + "@" + server + ":" + leapiconf.TLSPEMFile
+			//domain_pem_location += ";davs:leapi:" + leapiconf.SecretKey + ":" + server + ":" + syncPort + ":/api/file/upload/pem"
 		}
-		domain_pem_location += ";ssh:" + leapiconf.Username + "@" + server + ":" + leapiconf.TLSPEMFile
+	} else { //file sync type is HTTPS
+		domain_pem_location += ";davs:" + leapiconf.Username + ":" + leapiconf.SecretKey + ":" + leapiconf.Hostname + ":" + leapiconf.HTTPS_ServerPort + ":/api/file/sync/pem"
 	}
 	err = os.Setenv("DOMAIN_PEM_LOCATION", domain_pem_location)
 	if err != nil {
@@ -715,11 +865,16 @@ func renew() error {
 
 	//these parameters don't seem to be respected by gettssl from environment variables, so write them to config file:
 	ca_cert_location := leapiconf.TLSCAFile
-	for _, server := range servers {
-		if server == leapiconf.Hostname {
-			continue
+	if leapiconf.SyncType == "ssh" {
+		for _, server := range servers {
+			if server == leapiconf.Hostname {
+				continue
+			}
+			ca_cert_location += ";ssh:" + leapiconf.Username + "@" + server + ":" + leapiconf.TLSCAFile
+			//ca_cert_location += ";davs:leapi:" + leapiconf.SecretKey + ":" + server + ":" + syncPort + ":/api/file/upload/ca"
 		}
-		ca_cert_location += ";ssh:" + leapiconf.Username + "@" + server + ":" + leapiconf.TLSCAFile
+	} else { //file sync type is HTTPS
+		ca_cert_location += ";davs:" + leapiconf.Username + ":" + leapiconf.SecretKey + ":" + leapiconf.Hostname + ":" + leapiconf.HTTPS_ServerPort + ":/api/file/sync/ca"
 	}
 
 	reload_command := leapiconf.ReloadCommand
@@ -727,7 +882,11 @@ func renew() error {
 		if server == leapiconf.Hostname {
 			continue
 		}
-		reload_command += "; ssh " + leapiconf.Username + "@" + server + " '" + leapiconf.ReloadCommand + "'"
+		//old ssh method; requires ssh key
+		//reload_command += "; ssh " + leapiconf.Username + "@" + server + " '" + leapiconf.ReloadCommand + "'"
+		//new method; calls LEAPI to trigger reload
+		reload_command += " ; curl -s -k -X POST -H 'Authorization: Bearer " + leapiconf.SecretKey + "' " + syncScheme + server + "/api/reload"
+		//reload_command += "; 'curl -s -X POST -H \\\"Authorization: Bearer " + leapiconf.SecretKey + "\\\" " + syncScheme + server + "/api/reload"
 	}
 
 	ca_server := "https://acme-staging-v02.api.letsencrypt.org"
@@ -752,29 +911,64 @@ func renew() error {
 		return errors.New("Couldn't write getssl config file: " + configDir + "/" + leapiconf.PrimaryDomain + "/getssl.cfg")
 	}
 
-	/*
+	if leapiconf.Debug {
 		//////PRINT VARS
-		fmt.Println()
 		for _, e := range os.Environ() {
-			fmt.Println(e)
+			log.Println(e)
 		}
-	*/
+	}
 
 	//RUN GETSSL
-	//run getssl on primary domain to renew
-	//cmd := exec.Command(leapiconf.SrvDir+"/getssl", "-u", "-w", leapiconf.SrvDir, leapiconf.PrimaryDomain)
-	cmd := exec.Command(leapiconf.SrvDir+"/getssl", "-w", leapiconf.SrvDir, leapiconf.PrimaryDomain)
+	//first patch getssl to disable cert verification checking:
+	cmd := exec.Command("/usr/bin/sed", "-i", "s/NOMETER} -u/NOMETER} -k -u/g", leapiconf.SrvDir+"/getssl")
 	output, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Println(string(output))
+		return errors.New("RENEW: patching of getssl to disable curl certificate verification during LEAPI sync failed: " + err.Error())
+	}
+	//RUN getssl on primary domain to renew
+	//cmd = exec.Command(leapiconf.SrvDir+"/getssl", "-u", "-w", leapiconf.SrvDir, leapiconf.PrimaryDomain)
+	if leapiconf.Debug {
+		cmd = exec.Command(leapiconf.SrvDir+"/getssl", "-d", "-w", leapiconf.SrvDir, leapiconf.PrimaryDomain)
+	} else {
+		cmd = exec.Command(leapiconf.SrvDir+"/getssl", "-w", leapiconf.SrvDir, leapiconf.PrimaryDomain)
+	}
+	output, err = cmd.CombinedOutput()
 	if err != nil {
 		log.Println("BEGIN GETSSL OUTPUT:")
 		log.Println(string(output))
 		log.Println("END GETSSL OUTPUT")
-		return errors.New("RENEW: execution of getssl failed: " + err.Error())
+		return errors.New("RENEW: execution of getssl failed: " + err.Error() + " Check log file " + leapiconf.LogFile + " for more details.")
 	}
-
 	log.Println("BEGIN GETSSL OUTPUT:")
 	log.Println(string(output))
 	log.Println("END GETSSL OUTPUT")
+
+	return nil
+}
+
+func reload() error {
+	//To avoid problems with spaces in the command, we build a script file and run it in shell, rather than directly.
+	reloadScript := "#!/bin/sh\n"
+	reloadScript += leapiconf.ReloadCommand + "\n"
+
+	//write script file to run reload command[s]
+	err := ioutil.WriteFile(configDir+"/reloadscript.sh", []byte(reloadScript), 0755)
+	if err != nil {
+		return errors.New("Couldn't write reload script file: " + configDir + "/reloadscript.sh")
+	}
+
+	cmd := exec.Command(leapiconf.SrvDir + "/reloadscript.sh")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Println("BEGIN RELOADSCRIPT OUTPUT:")
+		log.Println(string(output))
+		log.Println("END RELOADSCRIPT OUTPUT")
+		return errors.New("RELOAD: execution of reload script failed: " + err.Error())
+	}
+	log.Println("BEGIN RELOADSCRIPT OUTPUT:")
+	log.Println(string(output))
+	log.Println("END RELOADSCRIPT OUTPUT")
 
 	return nil
 }
@@ -811,6 +1005,98 @@ func apiRenew(c echo.Context) error {
 	if err != nil {
 		return c.JSON(errorOut(http.StatusInternalServerError, "Error renewing: "+err.Error()))
 	}
+	return c.JSON(okOut())
+}
+
+func apiReload(c echo.Context) error {
+	err := reload()
+	if err != nil {
+		return c.JSON(errorOut(http.StatusInternalServerError, "Error reloading services: "+err.Error()))
+	}
+	return c.JSON(okOut())
+}
+
+func apiUpload(c echo.Context) error {
+	fileType := c.Param("fileType")
+	r := c.Request()
+
+	var filePath string
+	switch fileType {
+	case "ca":
+		filePath = leapiconf.TLSCAFile
+	case "chain":
+		filePath = leapiconf.TLSChainFile
+	case "key":
+		filePath = leapiconf.TLSKeyFile
+	case "cert":
+		filePath = leapiconf.TLSCertFile
+	case "pem":
+		filePath = leapiconf.TLSPEMFile
+	default: //ACL
+		//return c.JSON(errorOut(http.StatusBadRequest, "Invalid filetype/URL."))
+		filePath = leapiconf.LetsEncryptValidationPath + "/" + fileType
+	}
+
+	directory, _ := path.Split(filePath)
+
+	//Check and create directory
+	if _, err := os.Stat(directory); os.IsNotExist(err) {
+		err = os.MkdirAll(directory, 0755)
+		if err != nil {
+			return c.JSON(errorOut(http.StatusInternalServerError, "Filetype "+fileType+" directory does not exist, and could not create: "+err.Error()))
+		}
+	}
+
+	//Read the upload data
+	var blimit int64 = 102400 //100k max upload size
+	body, err := ioutil.ReadAll(io.LimitReader(r.Body, blimit))
+	if err != nil {
+		log.Println(err.Error())
+		return c.JSON(errorOut(http.StatusInternalServerError, "Error reading post body: "+err.Error()))
+	}
+
+	//Write the file
+	err = ioutil.WriteFile(filePath, body, 0644)
+	if err != nil {
+		return c.JSON(errorOut(http.StatusInternalServerError, "Could not write file: "+err.Error()))
+	}
+
+	log.Println("Received PUT to " + r.RequestURI)
+	log.Println("Writing to " + filePath)
+
+	return c.JSON(okOut())
+}
+
+func apiUploadSync(c echo.Context) error {
+	fileType := c.Param("fileType")
+	r := c.Request()
+
+	//Read the upload data
+	var blimit int64 = 102400 //100k max upload size
+	body, err := ioutil.ReadAll(io.LimitReader(r.Body, blimit))
+	if err != nil {
+		log.Println(err.Error())
+		return c.JSON(errorOut(http.StatusInternalServerError, "Error reading post body: "+err.Error()))
+	}
+
+	uuid := generateUUID()
+	filePath := leapiconf.SrvDir + "/" + fileType + "__" + uuid + ".tmpfile"
+
+	//Write the file
+	err = ioutil.WriteFile(filePath, body, 0644)
+	if err != nil {
+		return c.JSON(errorOut(http.StatusInternalServerError, "Could not write temporary file: "+err.Error()))
+	}
+
+	log.Println("Received PUT for sync to " + r.RequestURI)
+	log.Println("Writing to " + filePath)
+
+	err = sendFileToAllServers(filePath)
+	if err != nil {
+		log.Println(err.Error())
+		return c.JSON(errorOut(http.StatusInternalServerError, "Error sending file "+filePath+" to other servers: "+err.Error()))
+	}
+
 	return c.JSON(okOut())
 }
 

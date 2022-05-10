@@ -1,11 +1,13 @@
 //RuhNet LEAPI Config file
 //configDir set by environment variable LEAPI_CONFDIR, otherwise assumed to be /opt/leapi or ./
 {
-	"hostname":"web1.mydomain.net", 			//hostname of this particular server; must match the server you add to LEAPI
+	"hostname":"web1.mydomain.net", 			//hostname or IP of this particular server; must match the server you add to LEAPI. You can use "-" to use the system hostname (must be resolvable by other LEAPI systems).
 	"primary_domain":"mydomain.net", 			//the main base domain that is always present
 	"srv_dir":"/opt/leapi", 					//LEAPI installed directory
-	"user":"root", 								//the username to use for SSH
+	"sync_type":"https", 						//method of transferring files between LEAPI hosts. "ssh" or "https"
+	"username":"leapi", 						//the username to use for file transfer (applies to either http or ssh)
 	"log_file":"/var/log/leapi.log",
+	"debug":false,
 	"frontend_url":"admin.mydomain.net",	 	//the frontend URL, if any (for CORS). Use "-" if none.
 	"http_server_port":"80",					//set to 80 if you aren't using a separate web server
 	"https_server_port":"-",					//set to "-" to disable HTTPS (mainly useful for initial setup)
@@ -16,7 +18,7 @@
 	"tls_ca_path":"/etc/ssl/ca.crt",
 	"letsencrypt_validation_path":"-",			//if "-", LEAPI handles this and you don't use a separate web server
 	"renew_allow_days":"70",
-	"reload_command":"systemctl reload leapi ; systemctl restart nginx", 	//needs to match on all servers
+	"reload_command":"systemctl reload leapi ; systemctl restart nginx",
 	"check_port":"443", //the port/service to check to verify cert installation (https/imap/imaps/xmpp/ftp/smtp)
 	"production":false, //if false, the staging LE server will be used. Set true to use the rate limited real server.
 	"secret_key":"SecReT_KeY-4API-AuThenTiCaTiON"
